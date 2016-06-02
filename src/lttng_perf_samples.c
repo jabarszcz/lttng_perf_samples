@@ -1,6 +1,8 @@
 //TODO parameterize tracing : config file read to setup struct perf_sampling_config
 #define _GNU_SOURCE
 
+#include "config.h"
+
 #include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>

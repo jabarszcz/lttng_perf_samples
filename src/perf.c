@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 
-#include "config.h"
+#include "autoconf.h"
 
 #include <fcntl.h>
 #include <stdbool.h>
@@ -12,13 +12,26 @@
 
 #include "perf.h"
 
-#define IFERR(err, message, count) {					\
+static void inline IGNORE() {} // Ignore unused values explicitly
+
+#define SETERR(err, event) {				\
+		if (err) {				\
+			(event).error_status = ERROR;	\
+		}					\
+	}
+
+#define ERROR(err, message, count) {					\
 		if (err) {						\
-			write(perf_config.error_stream_fd,			\
-			      message "\n",				\
-			      (count) + 1);				\
+			IGNORE(write(perf_config.error_stream_fd,	\
+				     message "\n",			\
+				     (count) + 1));			\
 			return -1;					\
 		}							\
+	}
+
+#define SETERR_RET(err, event, message, count) {	\
+		SETERR(err, event);			\
+		ERROR(err, message, count);		\
 	}
 
 static struct perf_sampling_config perf_config = {0};
@@ -45,17 +58,17 @@ static int set_signal_handler(void (*sig_handler)(int, siginfo_t *, void *),
 	}
 
 	err = sigaction(perf_config.signo, &act, &oldact);
-	IFERR(err, "sigaction() call failed", 23);
+	ERROR(err, "sigaction() call failed", 23);
 
 	if (check) {
 		err = oldact.sa_handler != SIG_DFL &&
 			oldact.sa_handler != SIG_IGN;
-		IFERR(err, "old signal handler has been overwritten for perf",
+		ERROR(err, "old signal handler has been overwritten for perf",
 		      48);
 	}
 
 	//debug
-	write(perf_config.error_stream_fd, "signal handler installed\n", 25);
+	IGNORE(write(perf_config.error_stream_fd, "signal handler installed\n", 25));
 
 	return 0;
 }
@@ -76,13 +89,14 @@ static pid_t sys_gettid(void)
 static int perf_close_event(struct perf_event* event)
 {
 	int err;
-	if (event->status == CLOSED)
+	if (event->fd_status == CLOSED)
 		return 0;
 
 	err = close(event->fd);
-	IFERR(err, "Error closing event", 19);
+	SETERR_RET(err, *event, "Error closing event", 19);
 
-	event->status = CLOSED;
+	event->error_status = OK;
+	event->fd_status = CLOSED;
 	event->fd = -1;
 
 	return 0;
@@ -92,19 +106,20 @@ static int perf_open_event(struct perf_event* event)
 {
 	int fd, err;
 
-	write(perf_config.error_stream_fd, "OPEN\n", 5);
+	IGNORE(write(perf_config.error_stream_fd, "OPEN\n", 5));
 
-	if (event->status == OPEN) {
+	if (event->fd_status == OPEN) {
 		err = perf_close_event(event);
+		SETERR(err, *event);
 		if (err)
 			return -1;
 	}
 
 	// Register event and get a file descriptor
 	fd = sys_perf_event_open(&(event->attr), 0, -1, -1, 0);
-	IFERR(fd < 0, "Error starting sampling with sys_perf_event_open()", 50);
+	SETERR_RET(fd < 0, *event, "Error starting sampling with sys_perf_event_open()", 50);
 
-	event->status = OPEN;
+	event->fd_status = OPEN;
 	event->fd = fd;
 
 	// Get tid for fd setup
@@ -119,22 +134,23 @@ static int perf_open_event(struct perf_event* event)
 		.pid = tid,
 	};
 	err = fcntl(fd, F_SETOWN_EX, &fown);
-	IFERR(err, "Error setting file descriptor owner thread", 42);
+	SETERR_RET(err, *event, "Error setting file descriptor owner thread", 42);
 	//  Set the signal to use
 	fcntl(fd, F_SETSIG, perf_config.signo);
-	IFERR(err, "Error setting async fd IO signal", 32);
+	SETERR_RET(err, *event, "Error setting async fd IO signal", 32);
 	//  Setup async reading on file descriptor
 	int flags = fcntl(fd, F_GETFL);
 	err = fcntl(fd, F_SETFL, flags | O_ASYNC);
-	IFERR(err, "Error setting async flag on file", 32);
+	SETERR_RET(err, *event, "Error setting async flag on file", 32);
 
+	event->error_status = OK;
 	return 0;
 }
 
 static inline int perf_trigger_one_sample_fd(int fd)
 {
 	int err = ioctl(fd, PERF_EVENT_IOC_REFRESH, 1);
-	IFERR(err, "Error triggering perf_event sample", 34);
+	ERROR(err, "Error triggering perf_event sample", 34);
 
 	return 0;
 }
@@ -155,14 +171,14 @@ int perf_set_config(struct perf_sampling_config* config)
 	// is enabled is checking for the existence of the file
 	// /proc/sys/kernel/perf_event_paranoid."
 	err = access("/proc/sys/kernel/perf_event_paranoid", F_OK);
-	IFERR(err, "perf not supported by this kernel", 33);
+	ERROR(err, "perf not supported by this kernel", 33);
 
 	// Set static config
 	perf_config = *config;
 
 	// Setup signal handler
 	err = set_signal_handler(*perf_sampling_sig_handler, true);
-	IFERR(err, "error in signal handler setup", 29);
+	ERROR(err, "error in signal handler setup", 29);
 
 	return 0;
 }
@@ -191,7 +207,7 @@ void perf_event_init(struct perf_event* event)
 			.wakeup_events = 1,
 		},
 		.fd = -1,
-		.status = CLOSED,
+		.fd_status = CLOSED,
 		.next = (struct perf_event *) 0,
 	};
 
@@ -224,7 +240,7 @@ int perf_start_one_sample_all_events(void)
 	for (; head; head = head->next) {
 		err = perf_open_event(head);
 		err |= perf_trigger_one_sample_event(head);
-		IFERR(err, "Error starting event", 20);
+		ERROR(err, "Error starting event", 20);
 	}
 	return 0;
 }
@@ -237,7 +253,7 @@ int perf_stop(void)
 	// Close all events
 	for (; head; head = head->next) {
 		err = perf_close_event(head);
-		IFERR(err, "Error closing event", 19);
+		ERROR(err, "Error closing event", 19);
 	}
 	return 0;
 }
@@ -246,7 +262,7 @@ void perf_sampling_sig_handler(int signo, siginfo_t * info, void * context)
 {
 	int fd = info->si_fd;
 
-	write(perf_config.error_stream_fd, "In signal handler\n", 18);
+	IGNORE(write(perf_config.error_stream_fd, "In signal handler\n", 18));
 	if (perf_config.event_sample_cb)
 		perf_config.event_sample_cb();
 

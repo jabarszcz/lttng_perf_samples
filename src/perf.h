@@ -5,12 +5,14 @@
 #ifndef PERF_H_
 #define PERF_H_
 
-typedef enum {CLOSED, OPEN} event_status;
+typedef enum {CLOSED, OPEN} event_fd_status;
+typedef enum {OK, ERROR} event_error_status;
 
 struct perf_event {
 	struct perf_event_attr attr;
 	int fd;
-	event_status status;
+	event_fd_status fd_status;
+	event_error_status error_status;
 	struct perf_event* next;
 };
 

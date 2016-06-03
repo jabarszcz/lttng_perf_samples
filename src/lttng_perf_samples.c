@@ -1,50 +1,36 @@
-//TODO parameterize tracing : config file read to setup struct perf_sampling_config
 #define _GNU_SOURCE
 
-#include "config.h"
+#include "autoconf.h"
 
 #include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
 
+#include "load_config.h"
 #include "perf.h"
 
-static void init_lttng_perf_samples(void) __attribute__((constructor));
+static inline void IGNORE(){}
 
+static void init_lttng_perf_samples(void) __attribute__((constructor));
 
 static int lttng_logger;
 
 void event_sample_cb(void)
 {
-	write(lttng_logger, "In signal callback\n", 19);
-	write(STDERR_FILENO, ".", 1); // Debug
+	IGNORE(write(lttng_logger, "In signal callback\n", 19));
+	IGNORE(write(STDERR_FILENO, ".", 1)); // Debug
 
 	// TODO Unwind and trace here
 }
 
 void init_lttng_perf_samples(void)
 {
-	lttng_logger = open("/proc/lttng-logger", O_RDWR);
+	struct perf_sampling_config config;
 
-	if (!lttng_logger) {
-		fprintf(stderr, "lttng-logger file could not be opened");
-		return;
-	}
-	
-	struct perf_sampling_config config = {
-		.error_stream_fd = lttng_logger, // or stderr/file/etc
-		.event_sample_cb = event_sample_cb,
-	};
+	load_config(&config);
 
-	struct perf_event* event = malloc(sizeof(struct perf_event));
-
-	perf_event_init(event);
-	perf_config_add_event(&config, event);
-
-	// Parameterize perf events (hardcoded right now for debugging)
-	event->attr.type = PERF_TYPE_HARDWARE;
-	event->attr.config = PERF_COUNT_HW_CPU_CYCLES; 
+	config.event_sample_cb = event_sample_cb;
 
 	perf_set_config(&config);
 

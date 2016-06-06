@@ -127,17 +127,16 @@ int load_config_from_file(struct perf_sampling_config* config, char* filename)
 		config->error_stream_fd = STDOUT_FILENO;
 	}
 	if (config->error_stream_fd < 0) {
+		xmlChar * tofree = error_stream;
 		if (xmlStrcmp(error_stream, (const xmlChar *) "lttng-logger")) {
-			xmlFree(error_stream);
 			error_stream = "/proc/lttng-logger";
-		} else {
-			// Open the error stream as a file
-			config->error_stream_fd = open(error_stream, O_RDWR);
-			xmlFree(error_stream);
-			ERROR_GOTO(config->error_stream_fd < 0,
-				   LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT,
-				   "Error opening file error stream");
 		}
+		// Open the error stream as a file
+		config->error_stream_fd = open(error_stream, O_RDWR);
+		xmlFree(tofree);
+		ERROR_GOTO(config->error_stream_fd < 0,
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT,
+			   "Error opening file error stream");
 	} else {
 		xmlFree(error_stream);
 	}

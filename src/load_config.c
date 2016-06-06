@@ -62,6 +62,7 @@ int load_config_from_file(struct perf_sampling_config* config, char* filename)
 	// they are not yet loaded from the config file
 	set_default_config(config);
 
+	int retval = -1;
 	int err;
 	xmlDocPtr doc;
 	xmlNodePtr root;
@@ -143,17 +144,16 @@ int load_config_from_file(struct perf_sampling_config* config, char* filename)
 
 	// TODO load the events (Set to default values above in the mean time)
 
-	return 0;
-LOAD_CONFIG_FROM_FILE_ERROR_FREE_ERROR_STREAM:
-	xmlFree(error_stream);
-LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT:
-	xmlXPathFreeContext(context);
+	retval = 0;
+	// Free what is still allocated
 LOAD_CONFIG_FROM_FILE_ERROR_FREE_XPATH:
 	xmlXPathFreeObject(result);
+LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT:
+	xmlXPathFreeContext(context);
 LOAD_CONFIG_FROM_FILE_ERROR_FREE_DOC:
 	xmlFreeDoc(doc);
 	xmlCleanupParser();
-	return -1;
+	return retval;
 }
 
 int load_config(struct perf_sampling_config* config)

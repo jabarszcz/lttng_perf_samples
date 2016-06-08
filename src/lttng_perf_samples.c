@@ -14,11 +14,8 @@ static inline void IGNORE(){}
 
 static void init_lttng_perf_samples(void) __attribute__((constructor));
 
-static int lttng_logger;
-
 void event_sample_cb(void)
 {
-	IGNORE(write(lttng_logger, "In signal callback\n", 19));
 	IGNORE(write(STDERR_FILENO, ".", 1)); // Debug
 
 	// TODO Unwind and trace here
@@ -36,5 +33,3 @@ void init_lttng_perf_samples(void)
 
 	perf_start_one_sample_all_events();
 }
-
-

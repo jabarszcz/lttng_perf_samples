@@ -20,6 +20,7 @@ struct perf_sampling_config {
 	int signo;
 	struct perf_event* events;
 	int error_stream_fd;
+	int debug;
 	void (*event_sample_cb)(void);
 };
 

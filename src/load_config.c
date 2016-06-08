@@ -8,6 +8,7 @@
 #include <libxml/parser.h>
 #include <libxml/xpath.h>
 
+#include "perf_constants.h"
 #include "load_config.h"
 
 #define CONFIG_FILE_ENV_VAR "LTTNG_PERF_SAMPLING_CONFIG"
@@ -16,11 +17,12 @@
 #define ROOT_TYPE_NAME "sampling_config"
 
 #define SIGNO_XPATH "/" ROOT_TYPE_NAME "/@signal"
+#define DEBUG_XPATH "/" ROOT_TYPE_NAME "/@debug"
 #define ERROR_STREAM_XPATH "/" ROOT_TYPE_NAME "/@error_stream"
-#define EVENT_ELEM_XPATH "/" ROOT_TYPE_NAME "/element"
-#define EVENT_ELEM_TYPE_XPATH "TODO xpath expression"
-#define EVENT_ELEM_CONFIG_XPATH "TODO xpath expression"
-#define EVENT_ELEM_PERIOD_XPATH "TODO xpath expression"
+#define EVENT_XPATH "/" ROOT_TYPE_NAME "/event"
+#define EVENT_TYPE_XPATH "@type"
+#define EVENT_CONFIG_XPATH "@config"
+#define EVENT_PERIOD_XPATH "@period"
 
 #define ERROR_STREAM stderr
 
@@ -42,6 +44,7 @@ void set_default_config(struct perf_sampling_config* config)
 {
 	config->signo = 0;
 	config->error_stream_fd = STDERR_FILENO;
+	config->debug = 0;
 	config->events = NULL;
 
 	struct perf_event* def_event = malloc(sizeof(struct perf_event));
@@ -54,14 +57,8 @@ void set_default_config(struct perf_sampling_config* config)
 	perf_config_add_event(config, def_event);
 }
 
-
-static
 int load_config_from_file(struct perf_sampling_config* config, char* filename)
 {
-	// DEBUG TODO Remove this line. Only to set default events as
-	// they are not yet loaded from the config file
-	set_default_config(config);
-
 	int retval = -1;
 	int err;
 	xmlDocPtr doc;
@@ -87,7 +84,6 @@ int load_config_from_file(struct perf_sampling_config* config, char* filename)
 	// Fill successive config values from file with the help of xpath
 	xmlXPathContextPtr context;
 	xmlXPathObjectPtr result;
-	xmlNodeSetPtr nodeset;
 	context = xmlXPathNewContext(doc);
 	ERROR_GOTO(context == NULL,
 		   LOAD_CONFIG_FROM_FILE_ERROR_FREE_DOC,
@@ -98,54 +94,131 @@ int load_config_from_file(struct perf_sampling_config* config, char* filename)
 	ERROR_GOTO(result == NULL,
 		   LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT,
 		   "Error evaluating XPath expression");
-	ERROR_GOTO(xmlXPathNodeSetIsEmpty(result->nodesetval),
-		   LOAD_CONFIG_FROM_FILE_ERROR_FREE_XPATH,
-		   "Could not find signal number in config file %s",
-		   filename);
-	// This will default to 0 if malformed, which will set our
-	// default signal
-	config->signo =
-	  (int) xmlXPathCastNodeSetToNumber(result->nodesetval);
+	if(xmlXPathNodeSetIsEmpty(result->nodesetval)) {
+		config->signo = 0;  // Set to 0, which will set the
+				    // default signal
+	} else {
+		// This will default to 0 if malformed, which will set our
+		// default signal
+		config->signo =
+			(int) xmlXPathCastNodeSetToNumber(result->nodesetval);
+	}
+	xmlXPathFreeObject(result);
+
+	// -> Debug enabled?
+	result = xmlXPathEvalExpression(DEBUG_XPATH, context);
+	ERROR_GOTO(result == NULL,
+		   LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT,
+		   "Error evaluating XPath expression");
+	if(xmlXPathNodeSetIsEmpty(result->nodesetval)) {
+		config->debug = 0;  // Disable debugging information by default
+	} else {
+		config->debug =
+			(int) xmlXPathCastNodeSetToBoolean(result->nodesetval);
+	}
 	xmlXPathFreeObject(result);
 
 	// -> Get the error stream to use
-	xmlChar * error_stream;
+	xmlChar * error_stream, * tofree;
 	result = xmlXPathEvalExpression(ERROR_STREAM_XPATH, context);
+	ERROR_GOTO(result == NULL,
+		   LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT,
+		   "Error evaluating XPath expression");
+	error_stream = tofree = xmlXPathCastNodeSetToString(result->nodesetval);
+	if(xmlXPathNodeSetIsEmpty(result->nodesetval)) {
+		config->error_stream_fd = STDERR_FILENO;
+	} else {
+		config->error_stream_fd = -1;
+		if (!xmlStrcmp(error_stream, (const xmlChar *) "stderr")) {
+			config->error_stream_fd = STDERR_FILENO;
+		} else if (!xmlStrcmp(error_stream, (const xmlChar *) "stdout")) {
+			config->error_stream_fd = STDOUT_FILENO;
+		} else if (!xmlStrcmp(error_stream, (const xmlChar *) "lttng-logger")) {
+			error_stream = "/proc/lttng-logger";
+		}
+		// Open the error stream as a file
+		config->error_stream_fd = open(error_stream, O_RDWR);
+		ERROR_GOTO(config->error_stream_fd < 0,
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_ERROR_STREAM,
+			   "Error opening file error stream");
+	}
+	xmlXPathFreeObject(result);
+
+	// -> Load the perf_event descriptions
+	result = xmlXPathEvalExpression(EVENT_XPATH, context);
 	ERROR_GOTO(result == NULL,
 		   LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT,
 		   "Error evaluating XPath expression");
 	ERROR_GOTO(xmlXPathNodeSetIsEmpty(result->nodesetval),
 		   LOAD_CONFIG_FROM_FILE_ERROR_FREE_XPATH,
-		   "Could not find error stream option in config file %s",
+		   "Could not find perf_event descriptions in config file %s",
 		   filename);
-	error_stream = xmlXPathCastNodeSetToString(result->nodesetval);
-	xmlXPathFreeObject(result);
+	struct perf_event* new_event;
+	xmlNodePtr event_node;
+	xmlXPathObjectPtr event_result;
+	config->events = NULL;
+	for(int i = 0; i < result->nodesetval->nodeNr; ++i) {
+		new_event = malloc(sizeof(struct perf_event));
+		perf_event_init(new_event);
 
-	config->error_stream_fd = -1;
-	if (xmlStrcmp(error_stream, (const xmlChar *) "stderr")) {
-		config->error_stream_fd = STDERR_FILENO;
-	} else if (xmlStrcmp(error_stream, (const xmlChar *) "stdout")) {
-		config->error_stream_fd = STDOUT_FILENO;
-	}
-	if (config->error_stream_fd < 0) {
-		xmlChar * tofree = error_stream;
-		if (xmlStrcmp(error_stream, (const xmlChar *) "lttng-logger")) {
-			error_stream = "/proc/lttng-logger";
-		}
-		// Open the error stream as a file
-		config->error_stream_fd = open(error_stream, O_RDWR);
-		xmlFree(tofree);
-		ERROR_GOTO(config->error_stream_fd < 0,
-			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT,
-			   "Error opening file error stream");
-	} else {
-		xmlFree(error_stream);
-	}
+		event_node = result->nodesetval->nodeTab[i];
 
-	// TODO load the events (Set to default values above in the mean time)
+		// Event type
+		xmlChar* event_type;
+		event_result = xmlXPathNodeEval(event_node, EVENT_TYPE_XPATH, context);
+		ERROR_GOTO(event_result == NULL,
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_XPATH,
+			   "Error evaluating XPath expression");
+		ERROR_GOTO(xmlXPathNodeSetIsEmpty(event_result->nodesetval),
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_EVENT_RESULT,
+			   "Event is missing its type attribute");
+		event_type = xmlXPathCastNodeSetToString(event_result->nodesetval);
+		new_event->attr.type = perf_get_constant_value(event_type);
+		xmlFree(event_type);
+		ERROR_GOTO(new_event->attr.type == -1,
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_EVENT_RESULT,
+			   "Event type string is invalid");
+		xmlXPathFreeObject(event_result);
+
+		// Event config
+		xmlChar* event_config;
+		event_result = xmlXPathNodeEval(event_node, EVENT_CONFIG_XPATH, context);
+		ERROR_GOTO(event_result == NULL,
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_XPATH,
+			   "Error evaluating XPath expression");
+		ERROR_GOTO(xmlXPathNodeSetIsEmpty(event_result->nodesetval),
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_EVENT_RESULT,
+			   "Event is missing its event configuration");
+		event_config = xmlXPathCastNodeSetToString(event_result->nodesetval);
+		new_event->attr.config = perf_get_constant_value(event_config);
+		xmlFree(event_config);
+		ERROR_GOTO(new_event->attr.config == -1,
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_EVENT_RESULT,
+			   "Event config string is invalid");
+		xmlXPathFreeObject(event_result);
+
+		// Event period
+		int event_period;
+		event_result = xmlXPathNodeEval(event_node, EVENT_PERIOD_XPATH, context);
+		ERROR_GOTO(event_result == NULL,
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_XPATH,
+			   "Error evaluating XPath expression");
+		ERROR_GOTO(xmlXPathNodeSetIsEmpty(event_result->nodesetval),
+			   LOAD_CONFIG_FROM_FILE_ERROR_FREE_EVENT_RESULT,
+			   "Event is missing its period attribute");
+		event_period = xmlXPathCastNodeSetToNumber(event_result->nodesetval);
+		new_event->attr.sample_period = event_period;
+
+		// Add event to config
+		perf_config_add_event(config, new_event);
+	}
 
 	retval = 0;
 	// Free what is still allocated
+LOAD_CONFIG_FROM_FILE_ERROR_FREE_EVENT_RESULT:
+	xmlXPathFreeObject(event_result);
+LOAD_CONFIG_FROM_FILE_ERROR_FREE_ERROR_STREAM:
+	xmlFree(tofree);
 LOAD_CONFIG_FROM_FILE_ERROR_FREE_XPATH:
 	xmlXPathFreeObject(result);
 LOAD_CONFIG_FROM_FILE_ERROR_FREE_CONTEXT:
@@ -188,5 +261,6 @@ int load_config(struct perf_sampling_config* config)
 	// default internal config
 	fprintf(stderr, "Using default config\n");
 	set_default_config(config);
+
 	return 0;
 }

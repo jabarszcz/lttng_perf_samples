@@ -34,6 +34,14 @@ static void inline IGNORE() {} // Ignore unused values explicitly
 		ERROR(err, message, count);		\
 	}
 
+#define DEBUG(message, length) {					\
+		if (perf_config.debug) {				\
+			IGNORE(write(perf_config.error_stream_fd,	\
+				     message "\n",			\
+				     (length) + 1));			\
+		}							\
+	}
+
 static struct perf_sampling_config perf_config = {0};
 
 static void perf_sampling_sig_handler(int signo, siginfo_t * info, void * context);
@@ -67,8 +75,7 @@ static int set_signal_handler(void (*sig_handler)(int, siginfo_t *, void *),
 		      48);
 	}
 
-	//debug
-	IGNORE(write(perf_config.error_stream_fd, "signal handler installed\n", 25));
+	DEBUG("Signal handler installed", 24);
 
 	return 0;
 }
@@ -106,7 +113,7 @@ static int perf_open_event(struct perf_event* event)
 {
 	int fd, err;
 
-	IGNORE(write(perf_config.error_stream_fd, "OPEN\n", 5));
+	DEBUG("Open event file descriptor", 26);
 
 	if (event->fd_status == OPEN) {
 		err = perf_close_event(event);
@@ -171,7 +178,7 @@ int perf_set_config(struct perf_sampling_config* config)
 	// is enabled is checking for the existence of the file
 	// /proc/sys/kernel/perf_event_paranoid."
 	err = access("/proc/sys/kernel/perf_event_paranoid", F_OK);
-	ERROR(err, "perf not supported by this kernel", 33);
+	ERROR(err, "perf_events not supported by this kernel", 40);
 
 	// Set static config
 	perf_config = *config;
@@ -262,7 +269,7 @@ void perf_sampling_sig_handler(int signo, siginfo_t * info, void * context)
 {
 	int fd = info->si_fd;
 
-	IGNORE(write(perf_config.error_stream_fd, "In signal handler\n", 18));
+	DEBUG("In signal handler", 17);
 	if (perf_config.event_sample_cb)
 		perf_config.event_sample_cb();
 

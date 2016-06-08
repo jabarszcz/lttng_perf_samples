@@ -1,3 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<sampling_config signal='0' error_stream='stderr'>
+<sampling_config signal='12' error_stream='lttng-logger' debug='true'>
+  <event type='TYPE_HARDWARE' config='COUNT_HW_CACHE_MISSES' period='1000' />
 </sampling_config>
